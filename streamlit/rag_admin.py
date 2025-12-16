@@ -3,20 +3,20 @@ import requests
 import pandas as pd
 import base64
 from urllib.parse import quote
-
+import json
 
 # ============================================================================
 # CONFIGURAÇÃO DA PÁGINA
 # ============================================================================
 st.set_page_config(
-    page_title="Admin - RAG Multimídia",
+    page_title="Admin - RAG Híbrido",
     page_icon="🎬",
     layout="wide"
 )
 
 # URL da API
 if "api_url" not in st.session_state:
-    st.session_state.api_url = "http://localhost:8005"
+    st.session_state.api_url = "http://10.1.254.180:8005"
 
 API_URL = st.session_state.api_url
 
@@ -32,7 +32,7 @@ def check_api_status():
         return False
 
 def get_stats():
-    """Busca estatísticas e lista de arquivos PDF disponíveis"""
+    """Busca estatísticas, lista de arquivos e DETALHES DUAL MODE"""
     try:
         response = requests.get(f"{API_URL}/stats")
         if response.status_code == 200:
@@ -65,7 +65,7 @@ def create_association(payload):
         return False, str(e)
 
 def search_documents(query):
-    """Busca genérica no ChromaDB"""
+    """Busca genérica no Vector Store (Qdrant/Chroma)"""
     try:
         payload = {"query": query, "k": 5}
         response = requests.post(f"{API_URL}/search", json=payload)
@@ -79,7 +79,6 @@ def search_documents(query):
 def get_local_files(category):
     """Busca lista de arquivos locais na API (videos ou images)"""
     try:
-        # category deve ser 'videos' ou 'images'
         response = requests.get(f"{API_URL}/multimedia/files/{category}")
         if response.status_code == 200:
             return response.json().get("files", [])
@@ -88,9 +87,8 @@ def get_local_files(category):
         st.error(f"Erro ao listar arquivos locais: {e}")
         return []
 
-
 def upload_file_api(uploaded_file):
-    """Envia arquivo para a API (Serve para Criar e Atualizar)"""
+    """Envia arquivo para a API (Vai para AMBOS os bancos no modo Dual)"""
     try:
         files = {"file": (uploaded_file.name, uploaded_file, "application/pdf")}
         response = requests.post(f"{API_URL}/documents/upload", files=files)
@@ -101,7 +99,7 @@ def upload_file_api(uploaded_file):
         return False, str(e)
 
 def delete_file_api(filename):
-    """Solicita exclusão do arquivo"""
+    """Solicita exclusão do arquivo (Remove de AMBOS os bancos)"""
     try:
         response = requests.delete(f"{API_URL}/documents/{filename}")
         if response.status_code == 200:
@@ -110,24 +108,35 @@ def delete_file_api(filename):
     except Exception as e:
         return False, str(e)
 
-def render_pdf_from_api(filename):
+
+def render_pdf_from_api(filename, page_num=1):
     """
-    Busca o PDF na API e gera um iframe HTML para exibição
+    Busca o PDF na API e gera um iframe HTML para exibição via Base64
+    (Funciona mesmo acessando remotamente)
     """
     try:
-        # Chama a rota de view que criamos anteriormente
         url = f"{API_URL}/documents/{filename}/view"
         response = requests.get(url)
         
         if response.status_code == 200:
-            # Codifica os bytes em base64 para embutir no HTML
             base64_pdf = base64.b64encode(response.content).decode('utf-8')
-            pdf_display = f'<iframe src="data:application/pdf;base64,{base64_pdf}" width="100%" height="900" type="application/pdf"></iframe>'
+            # Adiciona #page=N ao final da string data URI (suporte varia por navegador)
+            pdf_display = f'''
+                <iframe src="data:application/pdf;base64,{base64_pdf}#page={page_num}" 
+                        width="100%" 
+                        height="800px" 
+                        type="application/pdf"
+                        style="border: 1px solid #ccc; border-radius: 5px;">
+                </iframe>
+            '''
             return pdf_display
         else:
-            return None
+            return f"<div style='color:red'>Erro ao carregar PDF da API: {response.status_code}</div>"
     except Exception as e:
-        return None
+        return f"<div style='color:red'>Erro de conexão: {str(e)}</div>"
+    
+
+
 # ============================================================================
 # INTERFACE PRINCIPAL
 # ============================================================================
@@ -143,23 +152,77 @@ with st.sidebar:
         st.warning("Certifique-se de rodar: `uvicorn api.main:app --reload`")
     
     st.divider()
-    st.info("Use este painel para enriquecer seus PDFs com vídeos, imagens e GIFs.")
+    st.info("Painel Híbrido: Gerencia Qdrant (Server) e ChromaDB (Local) simultaneamente.")
+    
     st.markdown("""
-    **Diretórios de Mídia Local:**
+    **Diretórios de Mídia:**
     - `data/media/videos`
     - `data/media/images`
     """)
 
 # --- Título ---
-st.title("🎬 Gerenciador de Multimídia RAG")
+st.title("🎬 Gerenciador RAG (Dual Mode)")
 
-# Abas
-tab_create, tab_explore, tab_list, tab_files = st.tabs([
+# Abas (ADICIONEI A ABA DASHBOARD)
+tab_dashboard, tab_create, tab_explore, tab_list, tab_files = st.tabs([
+    "📊 Dashboard Dual",
     "➕ Adicionar Mídia", 
-    "🔍 Explorar ChromaDB", 
-    "📋 Associações Existentes",
+    "🔍 Explorar Base", 
+    "📋 Associações",
     "📁 Gerenciar Arquivos"
 ])
+
+# ============================================================================
+# TAB 0: DASHBOARD DUAL (NOVA)
+# ============================================================================
+with tab_dashboard:
+    st.header("Monitoramento de Sincronia")
+    
+    stats = get_stats()
+    
+    if stats:
+        # Se tiver detalhes de comparação (Modo Dual)
+        if "details" in stats and stats["details"]:
+            details = stats["details"]
+            chroma = details.get("chroma", {})
+            qdrant = details.get("qdrant", {})
+            
+            c1, c2, c3 = st.columns(3)
+            
+            with c1:
+                st.info("📂 **ChromaDB (Local)**")
+                st.metric("Status", chroma.get("status", "Unknown").upper())
+                st.metric("Chunks", chroma.get("total_chunks", 0))
+                if chroma.get("status") == "online":
+                    st.caption(f"Path: {chroma.get('collection_name', 'N/A')}")
+            
+            with c2:
+                st.info("🚀 **Qdrant (Servidor)**")
+                st.metric("Status", qdrant.get("status", "Unknown").upper())
+                st.metric("Chunks", qdrant.get("total_chunks", 0))
+                if qdrant.get("status") == "online":
+                    st.caption("Host: 10.1.254.180")
+            
+            with c3:
+                st.warning("⚙️ **Modo Operacional**")
+                st.metric("Backend Ativo", stats.get("backend", "Unknown"))
+                
+                # Alerta de Sincronia
+                chroma_count = chroma.get("total_chunks", 0)
+                qdrant_count = qdrant.get("total_chunks", 0)
+                
+                if chroma_count != qdrant_count:
+                    st.error("⚠️ Dessincronizado!")
+                    st.caption("A contagem de chunks difere entre os bancos.")
+                else:
+                    st.success("✅ Sincronizado")
+                    st.caption("Ambos os bancos possuem a mesma quantidade de dados.")
+        else:
+            # Modo Simples (apenas um banco)
+            st.metric("Chunks Indexados", stats.get('total_chunks', 0))
+            st.text(f"Backend Único: {stats.get('collection_name', 'Default')}")
+    else:
+        st.warning("Não foi possível obter estatísticas da API.")
 
 # ============================================================================
 # TAB 1: ADICIONAR MÍDIA
@@ -169,7 +232,7 @@ with tab_create:
     available_docs = stats.get("sources", [])
 
     if not available_docs:
-        st.warning("Nenhum documento encontrado no ChromaDB. Faça a ingestão primeiro.")
+        st.warning("Nenhum documento encontrado nos bancos. Faça a ingestão na aba 'Gerenciar Arquivos'.")
     else:
         col_form, col_preview = st.columns([1, 1])
 
@@ -185,16 +248,16 @@ with tab_create:
             with c2:
                 section_name = st.text_input("Nome da Seção (Opcional)", help="Ex: Introdução, CGNAT, etc.")
             
-            # --- FEATURE: Espiar texto do Chroma ---
+            # Espiar texto (Agora busca no banco ativo - Qdrant preferencialmente)
             if st.button("📖 Ver texto indexado desta página"):
-                with st.spinner("Buscando no ChromaDB..."):
+                with st.spinner("Buscando no Vector Store..."):
                     try:
-                        # Busca filtrada por metadados
                         payload = {
                             "query": ".", 
                             "k": 5, 
                             "filter": {"source": selected_doc, "page": int(page_num)}
                         }
+                        # Chama a função auxiliar
                         res = requests.post(f"{API_URL}/search", json=payload)
                         if res.status_code == 200:
                             chunks = res.json().get("chunks", [])
@@ -216,13 +279,11 @@ with tab_create:
             
             media_type = st.selectbox("Tipo de Mídia", ["video", "image", "gif"])
             
-            # --- FEATURE: Seleção de Origem (URL vs Local) ---
             source_option = st.radio("Origem do Arquivo", ["🔗 URL Externa (YouTube, Web)", "📂 Arquivo Local (data/media)"], horizontal=True)
             
             final_media_url = ""
             
             if "Arquivo Local" in source_option:
-                # Define categoria da pasta
                 folder_category = "videos" if media_type == "video" else "images"
                 if media_type == "gif": folder_category = "images"
 
@@ -234,11 +295,9 @@ with tab_create:
                 else:
                     selected_file = st.selectbox(f"Selecione o arquivo ({folder_category})", local_files)
                     if selected_file:
-                        # Monta URL da API
                         final_media_url = f"{API_URL}/media/{folder_category}/{selected_file}"
                         st.success(f"Arquivo selecionado: {selected_file}")
             else:
-                # URL Externa
                 final_media_url = st.text_input("URL da Mídia", placeholder="https://youtube.com/watch?v=...")
 
             media_title = st.text_input("Título da Mídia", placeholder="Ex: Vídeo explicativo sobre X")
@@ -249,7 +308,6 @@ with tab_create:
             else:
                 media_duration = None
 
-            # Botão de Salvar
             st.markdown("<br>", unsafe_allow_html=True)
             if st.button("💾 Salvar Associação", type="primary", use_container_width=True):
                 if not final_media_url:
@@ -282,45 +340,28 @@ with tab_create:
 
         # --- Coluna da Direita: Preview do PDF ---
         with col_preview:
-            # st.subheader("👁️ Visualização do PDF")
-            
-            # if selected_doc:
-            #     safe_filename = quote(selected_doc)
-            #     pdf_url = f"{API_URL}/pdfs/{safe_filename}#page={page_num}"
-                
-            #     st.caption(f"Visualizando: {selected_doc} - Página {page_num}")
-            #     st.markdown(f"[Abrir em nova aba]({pdf_url})")
-                
-            #     # --- CORREÇÃO PARA VISUALIZAÇÃO DO PDF (HTML INJECTION) ---
-            #     pdf_display = f'''
-            #         <iframe src="{pdf_url}" 
-            #                 width="100%" 
-            #                 height="800px" 
-            #                 type="application/pdf"
-            #                 style="border: 1px solid #ccc; border-radius: 5px;">
-            #         </iframe>
-            #     '''
-            #     st.markdown(pdf_display, unsafe_allow_html=True)
-            with col_preview:
-                st.subheader("👁️ Visualização")
+            st.subheader("👁️ Visualização")
             
             if selected_doc:
                 # 1. VISUALIZAÇÃO DO PDF
-                safe_filename = quote(selected_doc)
-                pdf_url = f"{API_URL}/pdfs/{safe_filename}#page={page_num}"
+                pdf_html = render_pdf_from_api(selected_doc, page_num=page_num)
+                st.markdown(pdf_html, unsafe_allow_html=True)
+
+                # safe_filename = quote(selected_doc)
+                # pdf_url = f"{API_URL}/pdfs/{safe_filename}#page={page_num}"
                 
                 st.caption(f"Documento: {selected_doc} - Página {page_num}")
-                st.markdown(f"[Abrir PDF em nova aba]({pdf_url})")
+                #st.markdown(f"[Abrir PDF em nova aba]({pdf_url})")
                 
-                pdf_display = f'''
-                    <iframe src="{pdf_url}" 
-                            width="100%" 
-                            height="600px" 
-                            type="application/pdf"
-                            style="border: 1px solid #ccc; border-radius: 5px;">
-                    </iframe>
-                '''
-                st.markdown(pdf_display, unsafe_allow_html=True)
+                # pdf_display = f'''
+                #     <iframe src="{pdf_url}" 
+                #             width="100%" 
+                #             height="600px" 
+                #             type="application/pdf"
+                #             style="border: 1px solid #ccc; border-radius: 5px;">
+                #     </iframe>
+                # '''
+                # st.markdown(pdf_display, unsafe_allow_html=True)
 
                 # 2. LISTAGEM DE MÍDIAS JÁ ASSOCIADAS
                 st.divider()
@@ -351,49 +392,41 @@ with tab_create:
                             
                             try:
                                 if m_type == "video":
-                                    # TRATAMENTO ESPECIAL PARA GOOGLE DRIVE
                                     if "drive.google.com" in url:
-                                        # Tenta extrair o ID do arquivo
                                         try:
-                                            # Pega o que está depois de /d/ e antes da próxima barra
                                             file_id = url.split('/d/')[1].split('/')[0]
-                                            # Cria URL de embed
                                             drive_embed = f"https://drive.google.com/file/d/{file_id}/preview"
-                                            
-                                            st.markdown(f'''
-                                                <iframe src="{drive_embed}" width="100%" height="300" allow="autoplay"></iframe>
-                                            ''', unsafe_allow_html=True)
+                                            st.markdown(f'<iframe src="{drive_embed}" width="100%" height="300" allow="autoplay"></iframe>', unsafe_allow_html=True)
                                         except:
                                             st.error("Link do Drive inválido")
-                                            st.markdown(f"🔗 [Abrir no Drive]({url})")
                                     else:
-                                        # YouTube ou Arquivo Local
                                         st.video(url)
-
                                 elif m_type in ["image", "gif"]:
                                     st.image(url, use_column_width=True)
                                 else:
                                     st.markdown(f"🔗 [Link]({url})")
                             except Exception as e:
                                 st.error("Erro ao carregar preview")
-                                st.markdown(f"🔗 [Link]({url})")
+
 # ============================================================================
-# TAB 2: EXPLORAR CHROMADB
+# TAB 2: EXPLORAR BASE (Antigo Explorar ChromaDB)
 # ============================================================================
 with tab_explore:
     st.header("Busca no Banco Vetorial")
-    st.info("Use esta aba para encontrar em qual página está determinado assunto.")
+    st.info("A busca é realizada no backend ativo (Qdrant se online, Chroma caso contrário).")
     
     search_query = st.text_input("O que você procura?", placeholder="Ex: configuração de rede, cgnat...")
     
-    if st.button("Buscar no Chroma"):
+    if st.button("Buscar"):
         if search_query:
             results = search_documents(search_query)
             st.write(f"Encontrados {len(results)} trechos relevantes:")
             
             for doc in results:
                 meta = doc.get("metadata", {})
-                with st.expander(f"{meta.get('source')} - Pág. {meta.get('page')} (Score similiaridade)"):
+                origin = meta.get("_debug_origin", "Desconhecido")
+                with st.expander(f"{meta.get('source')} - Pág. {meta.get('page')} [{origin}]"):
+                    st.info(f"Fonte do Dado: **{origin}**")
                     st.markdown(f"**Trecho:**")
                     st.text(doc.get("content", "")[:500] + "...")
                     st.markdown(f"**Metadados:** `{meta}`")
@@ -413,7 +446,6 @@ with tab_list:
     if not assocs:
         st.info("Nenhuma associação cadastrada ainda.")
     else:
-        # Tabela
         data = []
         for a in assocs:
             for m in a.get("media_items", []):
@@ -439,8 +471,9 @@ with tab_list:
 # ============================================================================
 with tab_files:
     st.header("Gestão de Documentos PDF")
+    st.info("ℹ️ As operações de Upload e Exclusão são replicadas automaticamente para **Qdrant** e **Chroma** (Dual Mode).")
     
-    # Inicializa estado de visualização se não existir
+    # Inicializa estado de visualização
     if 'selected_pdf' not in st.session_state:
         st.session_state.selected_pdf = None
 
@@ -467,25 +500,25 @@ with tab_files:
                     st.warning(f"⚠️ Substituirá: '{uploaded_file.name}'")
                 
                 if st.button(btn_text, type=btn_type, use_container_width=True):
-                    with st.spinner("Processando..."):
+                    with st.spinner("Enviando para Chroma e Qdrant..."):
                         success, resp = upload_file_api(uploaded_file)
                         if success:
-                            st.success("Sucesso!")
+                            st.success("Sucesso! Sincronizado em ambos os bancos.")
+                            if "stats" in resp:
+                                st.json(resp["stats"])
                             st.rerun()
                         else:
                             st.error(f"Erro: {resp}")
 
-        # 2. Área de Visualização de PDF (Aparece aqui quando selecionado na direita)
+        # 2. Área de Visualização de PDF
         if st.session_state.selected_pdf:
             st.divider()
             st.subheader(f"📄 Visualizando: {st.session_state.selected_pdf}")
             
-            # Botão para fechar visualização
             if st.button("Fechar Visualização", icon="❌"):
                 st.session_state.selected_pdf = None
                 st.rerun()
             else:
-                # Renderiza o PDF
                 pdf_html = render_pdf_from_api(st.session_state.selected_pdf)
                 if pdf_html:
                     st.markdown(pdf_html, unsafe_allow_html=True)
@@ -496,7 +529,6 @@ with tab_files:
     with col_right:
         st.subheader("🗃️ Arquivos no Sistema")
         
-        # Busca e Filtro
         stats = get_stats()
         docs = stats.get("sources", [])
         
@@ -507,41 +539,34 @@ with tab_files:
         else:
             filtered_docs = docs
 
-        st.caption(f"Total: {len(filtered_docs)} arquivos")
+        st.caption(f"Total: {len(filtered_docs)} arquivos (Base: {stats.get('backend', 'Unknown')})")
         
-        # Lista com Scroll
         with st.container(height=600, border=True):
             if not filtered_docs:
                 st.info("Nenhum arquivo encontrado.")
             
             for doc in filtered_docs:
-                # Layout da linha: Nome | Ver | Excluir
                 c1, c2, c3 = st.columns([3, 0.8, 0.8])
                 
                 with c1:
-                    # Destaca em negrito se for o arquivo que está sendo visto
                     if doc == st.session_state.selected_pdf:
                         st.markdown(f"👉 **{doc}**")
                     else:
                         st.markdown(f"{doc}")
                 
                 with c2:
-                    # Botão VISUALIZAR (Atualiza o estado e recarrega)
-                    # Usamos um botão normal ao invés de link_button
                     if st.button("👁️", key=f"view_{doc}", help="Ver na esquerda"):
                         st.session_state.selected_pdf = doc
                         st.rerun()
                         
                 with c3:
-                    # Botão EXCLUIR
-                    if st.button("🗑️", key=f"del_{doc}", help="Excluir"):
-                        with st.spinner("Apagando..."):
+                    if st.button("🗑️", key=f"del_{doc}", help="Excluir de TODOS os bancos"):
+                        with st.spinner("Apagando do Chroma e Qdrant..."):
                             success, msg = delete_file_api(doc)
                             if success:
-                                # Se apagou o arquivo que estava vendo, limpa a visualização
                                 if st.session_state.selected_pdf == doc:
                                     st.session_state.selected_pdf = None
-                                st.toast("Arquivo excluído!")
+                                st.toast("Arquivo excluído permanentemente!")
                                 st.rerun()
                             else:
                                 st.error("Erro ao excluir")

@@ -13,6 +13,11 @@ class Config:
     
     # API Keys
     openai_api_key: str
+
+    vector_store_provider: str = "chroma"  # alterado
+    qdrant_host: str = "http://10.1.254.180"
+    qdrant_port: int = 6333
+    qdrant_api_key: Optional[str] = None
     
     # Modelos
     llm_model: str = "gpt-4o-mini"
@@ -35,6 +40,9 @@ class Config:
     
     # ChromaDB
     collection_name: str = "pdf_documents"
+
+    
+    
     
     # Chat
     max_history: int = 10
@@ -63,7 +71,12 @@ class Config:
             chunk_overlap=int(os.getenv("CHUNK_OVERLAP", "200")),
             default_k=int(os.getenv("DEFAULT_K", "6")),
             collection_name=os.getenv("COLLECTION_NAME", "pdf_documents"),
-            max_history=int(os.getenv("MAX_HISTORY", "10"))
+            max_history=int(os.getenv("MAX_HISTORY", "10")),
+
+            vector_store_provider=os.getenv("VECTOR_STORE_PROVIDER", "chroma"),
+            qdrant_host=os.getenv("QDRANT_HOST", "http://10.1.254.180"),
+            qdrant_port=int(os.getenv("QDRANT_PORT", "6333")),
+            qdrant_api_key=os.getenv("QDRANT_API_KEY", None),
         )
 
 

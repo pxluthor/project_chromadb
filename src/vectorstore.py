@@ -1,283 +1,405 @@
 """
-Módulo para gerenciamento do banco vetorial ChromaDB
+Módulo gerenciador de Vector Stores (Factory Pattern)
+Suporta: ChromaDB, Qdrant e Dual Mode (Escrita espelhada).
 """
-from pathlib import Path
-from typing import List, Dict, Optional
+import os
+from typing import List, Dict, Optional, Any
+from abc import ABC, abstractmethod
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings
+
+# Imports específicos
 from langchain_chroma import Chroma
+from langchain_qdrant import QdrantVectorStore
+from qdrant_client import QdrantClient
+from qdrant_client.http import models
 
 from .pdf_extractor import PDFDocument
 from .config import Config
 
-
-class VectorStore:
-    """Gerencia o banco vetorial ChromaDB"""
+# ==============================================================================
+# 1. Interface Base
+# ==============================================================================
+class BaseVectorStore(ABC):
     
     def __init__(self, config: Config):
-        """
-        Inicializa o VectorStore
-        
-        Args:
-            config: Configuração do sistema
-        """
         self.config = config
-        
-        # Inicializa embeddings
         self.embeddings = OpenAIEmbeddings(
             model=config.embedding_model,
             openai_api_key=config.openai_api_key
         )
-        
-        # Text splitter para chunking
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=config.chunk_size,
             chunk_overlap=config.chunk_overlap,
             length_function=len,
             separators=["\n\n", "\n", ". ", " ", ""]
         )
-        
-        # Vectorstore (será inicializado quando necessário)
-        self._vectorstore: Optional[Chroma] = None
+
+    @abstractmethod
+    def add_documents(self, pdf_documents: List[PDFDocument]) -> Dict[str, Any]:
+        pass
+
+    @abstractmethod
+    def search(self, query: str, k: Optional[int] = None, filter_dict: Optional[Dict] = None) -> List[Document]:
+        pass
     
-    @property
-    def vectorstore(self) -> Chroma:
-        """Lazy loading do vectorstore"""
-        if self._vectorstore is None:
-            self._vectorstore = self._load_or_create_vectorstore()
-        return self._vectorstore
+    @abstractmethod
+    def get_collection_stats(self) -> Dict[str, Any]:
+        pass
     
-    def _load_or_create_vectorstore(self) -> Chroma:
-        """Carrega ou cria o vectorstore"""
-        return Chroma(
-            collection_name=self.config.collection_name,
-            embedding_function=self.embeddings,
-            persist_directory=str(self.config.chroma_dir)
-        )
-    
-    def add_documents(self, pdf_documents: List[PDFDocument]) -> Dict[str, any]:
-        """
-        Adiciona documentos PDF ao vectorstore
+    @abstractmethod
+    def delete_document_by_name(self, filename: str) -> bool:
+        pass
         
-        Args:
-            pdf_documents: Lista de PDFDocuments
-            
-        Returns:
-            Estatísticas da indexação
-        """
-        all_chunks = []
-        stats = {
-            "total_documents": len(pdf_documents),
-            "total_pages": 0,
-            "total_chunks": 0,
-            "documents_processed": []
-        }
-        
-        for pdf_doc in pdf_documents:
-            # Cria chunks do documento
-            chunks = self._create_chunks(pdf_doc)
-            all_chunks.extend(chunks)
-            
-            stats["total_pages"] += pdf_doc.total_pages
-            stats["total_chunks"] += len(chunks)
-            stats["documents_processed"].append({
-                "filename": pdf_doc.metadata["filename"],
-                "pages": pdf_doc.total_pages,
-                "chunks": len(chunks)
-            })
-        
-        # Adiciona ao vectorstore
-        if all_chunks:
-            self.vectorstore.add_documents(all_chunks)
-        
-        return stats
-    
+    @abstractmethod
+    def clear_all_data(self) -> None:
+        pass
+
     def _create_chunks(self, pdf_doc: PDFDocument) -> List[Document]:
-        """
-        Cria chunks de um documento PDF
-        
-        Args:
-            pdf_doc: Documento PDF
-            
-        Returns:
-            Lista de Documents do LangChain
-        """
         chunks = []
-        
         for page in pdf_doc.pages:
-            # Split o texto da página em chunks
             page_chunks = self.text_splitter.split_text(page.text)
-            
-            # Cria Document para cada chunk
             for i, chunk_text in enumerate(page_chunks):
                 metadata = {
                     "source": pdf_doc.metadata["filename"],
-                    "filepath": str(pdf_doc.filepath),
                     "page": page.page_number,
                     "chunk_id": i,
-                    "title": pdf_doc.metadata["title"],
-                    "author": pdf_doc.metadata["author"],
-                    "file_hash": pdf_doc.metadata["file_hash"]
+                    "title": pdf_doc.metadata.get("title", ""),
                 }
-                
-                doc = Document(
-                    page_content=chunk_text,
-                    metadata=metadata
-                )
-                chunks.append(doc)
-        
+                chunks.append(Document(page_content=chunk_text, metadata=metadata))
         return chunks
-    
-    def search(
-        self, 
-        query: str, 
-        k: Optional[int] = None,
-        filter_dict: Optional[Dict] = None
-    ) -> List[Document]:
-        """
-        Busca documentos similares
-        
-        Args:
-            query: Query de busca
-            k: Número de resultados (usa default_k se None)
-            filter_dict: Filtros de metadados
-            
-        Returns:
-            Lista de documentos relevantes
-        """
-        k = k or self.config.default_k
-        
-        if filter_dict:
-            return self.vectorstore.similarity_search(
-                query, 
-                k=k,
-                filter=filter_dict
-            )
-        else:
-            return self.vectorstore.similarity_search(query, k=k)
-    
-    def search_with_scores(
-        self, 
-        query: str, 
-        k: Optional[int] = None
-    ) -> List[tuple[Document, float]]:
-        """
-        Busca documentos com scores de similaridade
-        
-        Args:
-            query: Query de busca
-            k: Número de resultados
-            
-        Returns:
-            Lista de tuplas (documento, score)
-        """
-        k = k or self.config.default_k
-        return self.vectorstore.similarity_search_with_score(query, k=k)
-    
-    def delete_collection(self) -> None:
-        """Deleta a collection do vectorstore"""
-        if self._vectorstore:
-            self._vectorstore.delete_collection()
-            self._vectorstore = None
-    
-    def get_collection_stats_old(self) -> Dict[str, any]:
-        """
-        Retorna estatísticas da collection
-        
-        Returns:
-            Dicionário com estatísticas
-        """
-        try:
-            collection = self.vectorstore._collection
-            count = collection.count()
-            
-            # Pega alguns documentos para extrair metadados únicos
-            if count > 0:
-                results = collection.get(limit=min(100, count))
-                sources = set()
-                
-                if results and "metadatas" in results:
-                    for metadata in results["metadatas"]:
-                        if "source" in metadata:
-                            sources.add(metadata["source"])
-                
-                return {
-                    "total_chunks": count,
-                    "unique_sources": len(sources),
-                    "sources": sorted(list(sources)),
-                    "collection_name": self.config.collection_name
-                }
-            else:
-                return {
-                    "total_chunks": 0,
-                    "unique_sources": 0,
-                    "sources": [],
-                    "collection_name": self.config.collection_name
-                }
-        except Exception as e:
-            return {
-                "error": str(e),
-                "collection_name": self.config.collection_name
-            }
-    
-    def get_collection_stats(self) -> Dict[str, any]:
-        """
-        Retorna estatísticas da collection (Versão Corrigida para listar tudo)
-        """
-        try:
-            collection = self.vectorstore._collection
-            count = collection.count()
-            
-            if count > 0:
-                # ALTERAÇÃO AQUI: Removemos o limit=min(100, count)
-                # Trazemos apenas os metadados de TODOS os chunks para identificar as fontes únicas
-                results = collection.get(include=["metadatas"])
-                
-                sources = set()
-                if results and "metadatas" in results:
-                    for metadata in results["metadatas"]:
-                        if "source" in metadata:
-                            sources.add(metadata["source"])
-                
-                return {
-                    "total_chunks": count,
-                    "unique_sources": len(sources),
-                    "sources": sorted(list(sources)),
-                    "collection_name": self.config.collection_name
-                }
-            else:
-                return {
-                    "total_chunks": 0,
-                    "unique_sources": 0,
-                    "sources": [],
-                    "collection_name": self.config.collection_name
-                }
-        except Exception as e:
-            return {
-                "error": str(e),
-                "collection_name": self.config.collection_name
-            }
 
-    def clear_all_data(self) -> None:
-        """Limpa todos os dados do vectorstore"""
-        import shutil
-        if self.config.chroma_dir.exists():
-            shutil.rmtree(self.config.chroma_dir)
-            self.config.chroma_dir.mkdir(parents=True, exist_ok=True)
-        self._vectorstore = None
+
+# ==============================================================================
+# 2. Implementação ChromaDB (Local)
+# ==============================================================================
+class ChromaDBVectorStore(BaseVectorStore):
+    
+    def __init__(self, config: Config):
+        super().__init__(config)
+        print(f"📂 [Chroma] Inicializando em: {config.chroma_dir}")
+        self._vectorstore = Chroma(
+            collection_name=config.collection_name,
+            embedding_function=self.embeddings,
+            persist_directory=str(config.chroma_dir)
+        )
+    
+    def add_documents(self, pdf_documents: List[PDFDocument]) -> Dict[str, Any]:
+        all_chunks = []
+        stats = {"total_documents": len(pdf_documents), "total_chunks": 0}
+        for doc in pdf_documents:
+            chunks = self._create_chunks(doc)
+            all_chunks.extend(chunks)
+        
+        if all_chunks:
+            self._vectorstore.add_documents(all_chunks)
+            stats["total_chunks"] = len(all_chunks)
+        return stats
+
+    def search(self, query: str, k: Optional[int] = None, filter_dict: Optional[Dict] = None) -> List[Document]:
+        k = k or self.config.default_k
+        if filter_dict:
+            results = self._vectorstore.similarity_search(query, k=k, filter=filter_dict)
+        else:
+            results = self._vectorstore.similarity_search(query, k=k)
+            
+        # GARANTE A ORIGEM AQUI TAMBÉM
+        for doc in results:
+            doc.metadata["_debug_origin"] = "📂 ChromaDB (Local)"
+        return results
+
+    def get_collection_stats(self) -> Dict[str, Any]:
+        try:
+            collection = self._vectorstore._collection
+            count = collection.count()
+            unique_sources = set()
+            
+            if count > 0:
+                data = collection.get(include=["metadatas"])
+                if data and "metadatas" in data:
+                    for meta in data["metadatas"]:
+                        if meta and "source" in meta:
+                            unique_sources.add(meta["source"])
+
+            return {
+                "total_chunks": count, 
+                "unique_sources": len(unique_sources),
+                "sources": sorted(list(unique_sources)),
+                "collection_name": self.config.collection_name, 
+                "backend": "ChromaDB (Local)"
+            }
+        except Exception as e:
+            return {"error": str(e), "backend": "ChromaDB", "sources": []}
 
     def delete_document_by_name(self, filename: str) -> bool:
-        """
-        Remove todos os chunks associados a um nome de arquivo específico.
-        Essencial para Exclusão e Atualização (limpeza prévia).
-        """
         try:
-            # Remove do ChromaDB filtrando pelo metadado 'source'
-            self.vectorstore._collection.delete(
-                where={"source": filename}
+            self._vectorstore._collection.delete(where={"source": filename})
+            return True
+        except:
+            return False
+
+    def clear_all_data(self) -> None:
+        try:
+            self._vectorstore.delete_collection()
+        except:
+            pass
+
+
+# ==============================================================================
+# 3. Implementação Qdrant (Remoto)
+# ==============================================================================
+class QdrantVectorStoreImp(BaseVectorStore):
+    
+    def __init__(self, config: Config):
+        super().__init__(config)
+        print(f"🔌 [Qdrant] Conectando a: {config.qdrant_host}:{config.qdrant_port}")
+        
+        self.client = QdrantClient(
+            url=config.qdrant_host,
+            port=config.qdrant_port,
+            api_key=config.qdrant_api_key,
+            check_compatibility=False
+        )
+        
+        if not self.client.collection_exists(config.collection_name):
+            self.client.create_collection(
+                collection_name=config.collection_name,
+                vectors_config=models.VectorParams(size=1536, distance=models.Distance.COSINE)
+            )
+
+        self._vectorstore = QdrantVectorStore(
+            client=self.client,
+            collection_name=config.collection_name,
+            embedding=self.embeddings,
+        )
+
+    def add_documents(self, pdf_documents: List[PDFDocument]) -> Dict[str, Any]:
+        all_chunks = []
+        stats = {"total_documents": len(pdf_documents), "total_chunks": 0}
+        for doc in pdf_documents:
+            chunks = self._create_chunks(doc)
+            all_chunks.extend(chunks)
+        
+        if all_chunks:
+            self._vectorstore.add_documents(all_chunks, batch_size=100)
+            stats["total_chunks"] = len(all_chunks)
+        return stats
+
+    def search(self, query: str, k: Optional[int] = None, filter_dict: Optional[Dict] = None) -> List[Document]:
+        k = k or self.config.default_k
+        results = self._vectorstore.similarity_search(query, k=k, filter=filter_dict)
+        
+        # GARANTE A ORIGEM AQUI TAMBÉM (Caso rode em modo Qdrant Puro)
+        for doc in results:
+            doc.metadata["_debug_origin"] = "🚀 Qdrant (Server)"
+        return results
+
+    def get_collection_stats(self) -> Dict[str, Any]:
+        """Recupera estatísticas do Qdrant com suporte a metadados aninhados"""
+        try:
+            collection_name = self.config.collection_name
+            if not self.client.collection_exists(collection_name):
+                 return {"total_chunks": 0, "unique_sources": 0, "sources": [], "backend": "Qdrant"}
+
+            info = self.client.get_collection(collection_name)
+            count = info.points_count
+            unique_sources = set()
+
+            if count > 0:
+                limit_scan = 5000 
+                scroll_result, _ = self.client.scroll(
+                    collection_name=collection_name,
+                    limit=min(count, limit_scan),
+                    with_payload=True,
+                    with_vectors=False
+                )
+                for point in scroll_result:
+                    if point.payload:
+                        # 1. Tenta pegar na raiz
+                        src = point.payload.get("source")
+                        # 2. Tenta metadata
+                        if not src and "metadata" in point.payload:
+                            if isinstance(point.payload["metadata"], dict):
+                                src = point.payload["metadata"].get("source")
+                        # 3. Fallback
+                        if not src:
+                             src = point.payload.get("filename")
+                             
+                        if src:
+                            unique_sources.add(src)
+
+            return {
+                "total_chunks": count, 
+                "unique_sources": len(unique_sources),
+                "sources": sorted(list(unique_sources)),
+                "collection_name": collection_name, 
+                "backend": "Qdrant (Server)"
+            }
+        except Exception as e:
+            print(f"Erro Qdrant Stats: {e}")
+            return {"error": str(e), "backend": "Qdrant", "sources": []}
+
+    def delete_document_by_name(self, filename: str) -> bool:
+        """Deleta por source ou metadata.source"""
+        try:
+            self.client.delete(
+                collection_name=self.config.collection_name,
+                points_selector=models.FilterSelector(
+                    filter=models.Filter(
+                        should=[
+                            models.FieldCondition(key="source", match=models.MatchValue(value=filename)),
+                            models.FieldCondition(key="metadata.source", match=models.MatchValue(value=filename))
+                        ]
+                    )
+                )
             )
             return True
         except Exception as e:
-            print(f"Erro ao deletar documento {filename}: {e}")
+            print(f"Erro ao deletar no Qdrant: {e}")
             return False
+
+    def clear_all_data(self) -> None:
+        try:
+            self.client.delete_collection(self.config.collection_name)
+        except:
+            pass
+
+# ==============================================================================
+# 4. Implementação DUAL (Híbrida)
+# ==============================================================================
+class DualVectorStore(BaseVectorStore):
+    """
+    Gerencia Chroma e Qdrant com Alta Disponibilidade.
+    """
+    def __init__(self, config: Config):
+        super().__init__(config)
+        print("\n🚀 [DUAL MODE] Inicializando Sistema Híbrido (Chroma + Qdrant)")
+        self.chroma = ChromaDBVectorStore(config)
+        
+        try:
+            self.qdrant = QdrantVectorStoreImp(config)
+            self._qdrant_online = True
+        except Exception as e:
+            print(f"⚠️ AVISO: Qdrant offline na inicialização ({e}). Operando apenas com Chroma.")
+            self._qdrant_online = False
+            self.qdrant = None
+
+    def add_documents(self, pdf_documents: List[PDFDocument]) -> Dict[str, Any]:
+        stats = {"backend": "Dual", "details": []}
+        
+        try:
+            print(">> [Dual] Gravando no Chroma...")
+            chroma_stats = self.chroma.add_documents(pdf_documents)
+            stats["chroma"] = "OK"
+            stats["total_chunks"] = chroma_stats.get("total_chunks", 0)
+        except Exception as e:
+            print(f"❌ Erro Chroma: {e}")
+            stats["chroma"] = str(e)
+
+        if self._qdrant_online:
+            try:
+                print(">> [Dual] Gravando no Qdrant...")
+                qdrant_stats = self.qdrant.add_documents(pdf_documents)
+                stats["qdrant"] = "OK"
+                stats["total_chunks"] = qdrant_stats.get("total_chunks", stats.get("total_chunks"))
+            except Exception as e:
+                print(f"❌ Erro Qdrant: {e}")
+                stats["qdrant"] = str(e)
+        else:
+            stats["qdrant"] = "Offline"
+
+        return stats
+
+    def search(self, query: str, k: Optional[int] = None, filter_dict: Optional[Dict] = None) -> List[Document]:
+        # Tenta Qdrant primeiro
+        if self._qdrant_online:
+            try:
+                # O QdrantVectorStoreImp.search já injeta a tag agora
+                results = self.qdrant.search(query, k, filter_dict)
+                return results
+            except Exception as e:
+                print(f"⚠️ [FALLBACK] Erro no Qdrant: {e}. Usando Chroma.")
+
+        # Fallback para Chroma
+        print(">> [Dual] Buscando no ChromaDB")
+        # O ChromaDBVectorStore.search já injeta a tag agora
+        return self.chroma.search(query, k, filter_dict)
+
+    def get_collection_stats(self) -> Dict[str, Any]:
+        # 1. Coleta Chroma
+        chroma_stats = {"status": "error", "total_chunks": 0, "sources": []}
+        try:
+            chroma_stats = self.chroma.get_collection_stats()
+            chroma_stats["status"] = "online"
+        except Exception as e:
+            chroma_stats["error"] = str(e)
+
+        # 2. Coleta Qdrant
+        qdrant_stats = {"status": "offline", "total_chunks": 0, "sources": []}
+        if self._qdrant_online:
+            try:
+                qdrant_stats = self.qdrant.get_collection_stats()
+                qdrant_stats["status"] = "online"
+            except Exception as e:
+                qdrant_stats["status"] = "error"
+                qdrant_stats["error"] = str(e)
+
+        # 3. MERGE DE FONTES
+        c_sources = set(chroma_stats.get("sources", []))
+        q_sources = set(qdrant_stats.get("sources", []))
+        all_sources = sorted(list(c_sources | q_sources))
+        
+        total_chunks = max(chroma_stats.get("total_chunks", 0), qdrant_stats.get("total_chunks", 0))
+
+        if qdrant_stats.get("status") == "online":
+             backend_name = "Dual (Híbrido)"
+        else:
+             backend_name = "Dual (Chroma Fallback)"
+
+        return {
+            "total_chunks": total_chunks, 
+            "unique_sources": len(all_sources),
+            "sources": all_sources,
+            "collection_name": self.config.collection_name, 
+            "backend": backend_name,
+            "details": {
+                "chroma": chroma_stats,
+                "qdrant": qdrant_stats
+            }
+        }
+
+    def delete_document_by_name(self, filename: str) -> bool:
+        res_chroma = False
+        res_qdrant = False
+        try:
+            res_chroma = self.chroma.delete_document_by_name(filename)
+        except: pass
+        
+        if self._qdrant_online:
+            try:
+                res_qdrant = self.qdrant.delete_document_by_name(filename)
+            except: pass
+
+        return res_chroma or res_qdrant
+
+    def clear_all_data(self) -> None:
+        self.chroma.clear_all_data()
+        if self._qdrant_online:
+            try:
+                self.qdrant.clear_all_data()
+            except: pass
+
+
+# ==============================================================================
+# 5. Factory Function
+# ==============================================================================
+def VectorStore(config: Config) -> BaseVectorStore:
+    provider = getattr(config, "vector_store_provider", "chroma").lower()
+    
+    if provider == "dual":
+        return DualVectorStore(config)
+    elif provider == "qdrant":
+        return QdrantVectorStoreImp(config)
+    else:
+        return ChromaDBVectorStore(config)

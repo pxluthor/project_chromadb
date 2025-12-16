@@ -212,6 +212,8 @@ async def query_documents(
         )
 
 
+
+
 @app.post("/search", response_model=SearchResponse)
 async def search_documents(
     request: SearchRequest,
@@ -219,8 +221,6 @@ async def search_documents(
 ):
     """
     Busca chunks similares sem gerar resposta
-    
-    Útil para agentes que querem apenas recuperar contexto relevante.
     """
     try:
         if not request.query or not request.query.strip():
@@ -242,14 +242,12 @@ async def search_documents(
         # Formata resultados
         chunks = []
         for doc in results:
+            # CORREÇÃO AQUI:
+            # Antes: Criávamos um dicionário manual que excluía o _debug_origin
+            # Agora: Passamos o doc.metadata completo, que contém a origem injetada
             chunks.append({
                 "content": doc.page_content,
-                "metadata": {
-                    "source": doc.metadata.get("source", "N/A"),
-                    "page": doc.metadata.get("page", "N/A"),
-                    "title": doc.metadata.get("title", "N/A"),
-                    "chunk_id": doc.metadata.get("chunk_id", "N/A")
-                }
+                "metadata": doc.metadata 
             })
         
         return SearchResponse(

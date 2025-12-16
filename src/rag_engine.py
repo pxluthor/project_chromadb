@@ -141,98 +141,6 @@ class RAGEngine:
             result["sources"] = sources
             
         return result
-
-    def query_old(  # não está trazendo a mídia para a raiz
-        self, 
-        question: str, 
-        k: Optional[int] = None,
-        include_sources: bool = True,
-        include_media: bool = True
-    ) -> Dict[str, any]:
-        """
-        Faz uma pergunta e retorna resposta baseada nos documentos
-        
-        Args:
-            question: Pergunta do usuário
-            k: Número de chunks a recuperar
-            include_sources: Se True, inclui documentos fonte
-            include_media: Se True, inclui mídia associada (imagens/vídeos)
-            
-        Returns:
-            Dicionário com resposta e metadados
-        """
-        # Busca contexto relevante
-        relevant_docs = self.vectorstore.search(question, k=k)
-        
-        if not relevant_docs:
-            return {
-                "question": question,
-                "answer": "Desculpe, não encontrei informações relevantes nos documentos para responder sua pergunta.",
-                "sources": [],
-                "num_sources": 0,
-                "media": []
-            }
-        
-        # Gera resposta
-        answer = self._generate_answer(question, relevant_docs)
-        
-        result = {
-            "question": question,
-            "answer": answer,
-            "num_sources": len(relevant_docs),
-            "media": [],        
-            "has_media": False  
-        }
-        
-        # Adiciona fontes se solicitado
-        if include_sources:
-            sources = self._format_sources(relevant_docs)
-            
-            # Enriquece com multimídia se ativado
-            if include_media and self.enable_multimedia and self.multimedia_manager:
-                sources = self.multimedia_manager.enrich_sources_with_media(
-                    sources,
-                    query=question
-                )
-                all_media = []
-                seen_urls = set()
-                
-                for source in sources:
-                    if 'media' in source:
-                        for item in source['media']:
-                            # Evita duplicatas (ex: mesma imagem em 2 chunks da mesma página)
-                            if item['url'] not in seen_urls:
-                                all_media.append(item)
-                                seen_urls.add(item['url'])
-                
-                # Se não achou nada por página, tenta uma busca geral por keywords nas mídias
-                if not all_media:
-                     keyword_results = self.multimedia_manager.find_media_by_keywords(question, top_k=2)
-                     for res in keyword_results:
-                         for item in res['media_items']:
-                             if item.url not in seen_urls:
-                                 all_media.append(item.to_dict()) # to_dict pois vem do objeto
-                                 seen_urls.add(item.url)
-
-                result["sources"] = sources
-                result["media"] = all_media
-                result["has_media"] = len(all_media) > 0
-                
-        return result
-    
-        #     result["sources"] = sources
-            
-        #     # Extrai mídia de todas as fontes para fácil acesso
-        #     if include_media:
-        #         all_media = []
-        #         for source in sources:
-        #             if 'media' in source:
-        #                 all_media.extend(source['media'])
-                
-        #         result["media"] = all_media
-        #         result["has_media"] = len(all_media) > 0
-        
-        # return result
     
     def _generate_answer(self, question: str, context_docs: List[Document]) -> str:
         """
@@ -271,22 +179,23 @@ class RAGEngine:
     def _build_prompt(self, question: str, context: str) -> str:
         """Constrói o prompt para o LLM"""
         return f"""Você é um assistente especializado em análise de documentos PDF. 
-Sua função é responder perguntas baseando-se EXCLUSIVAMENTE no contexto fornecido abaixo.
+                    Sua função é responder perguntas baseando-se EXCLUSIVAMENTE no contexto fornecido abaixo.
 
-INSTRUÇÕES IMPORTANTES:
-1. Use APENAS as informações presentes no contexto fornecido
-2. Se a informação não estiver no contexto, diga claramente que não encontrou
-3. Cite as fontes (documento e página) quando relevante
-4. Seja preciso, claro e objetivo
-5. Organize a resposta de forma estruturada quando apropriado
-6. Se houver informações conflitantes, mencione isso
+                    INSTRUÇÕES IMPORTANTES:
+                    1. Use APENAS as informações presentes no contexto fornecido
+                    2. Se a informação não estiver no contexto, diga claramente que não encontrou
+                    3. Cite as fontes (documento e página) quando relevante
+                    4. Seja preciso, claro e objetivo
+                    5. Organize a resposta de forma estruturada quando apropriado
+                    6. Se houver informações conflitantes, mencione isso
 
-CONTEXTO DOS DOCUMENTOS:
-{context}
+                    CONTEXTO DOS DOCUMENTOS:
+                    {context}
 
-PERGUNTA DO USUÁRIO: {question}
+                    PERGUNTA DO USUÁRIO: {question}
 
-RESPOSTA:"""
+                    RESPOSTA:
+                """
     
     def _format_sources(self, docs: List[Document]) -> List[Dict[str, any]]:
         """Formata documentos fonte para resposta"""
@@ -299,12 +208,16 @@ RESPOSTA:"""
             safe_filename = quote(filename)
             pdf_url = f"{base_url}/{safe_filename}"
 
+            # Tenta pegar a origem injetada pelo VectorStore
+            origin = doc.metadata.get("_debug_origin", "Sistema (Padrão)")
+
             source_info = {
-                "source": doc.metadata.get("source", "Desconhecido"),
+                "source": filename,#doc.metadata.get("source", "Desconhecido"),
                 "page": doc.metadata.get("page", "N/A"),
                 "title": doc.metadata.get("title", "Sem título"),
                 "excerpt": doc.page_content[:300] + "..." if len(doc.page_content) > 300 else doc.page_content,
-                "pdf_url": pdf_url
+                "pdf_url": pdf_url,
+                "origin": origin
             }
             sources.append(source_info)
         

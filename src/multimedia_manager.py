@@ -127,30 +127,6 @@ class MultimediaManager:
         self.associations.append(assoc)
         return assoc
     
-    def find_media_by_document_old(
-        self,
-        document_name: str,
-        page_number: Optional[int] = None
-    ) -> List[MediaItem]:
-        """
-        Busca mídia por documento e página
-        
-        Args:
-            document_name: Nome do documento
-            page_number: Número da página (opcional)
-            
-        Returns:
-            Lista de itens de mídia
-        """
-        results = []
-
-        for assoc in self.associations:
-            if assoc.document_name == document_name:
-                if page_number is None or assoc.page_number is None or assoc.page_number == page_number:
-                    results.extend(assoc.media_items)
-        
-        return results
-    
     def find_media_by_document(
         self,
         document_name: str,

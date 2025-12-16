@@ -21,6 +21,7 @@ class SourceModel(BaseModel):
     excerpt: Optional[str] = None
     chunk_id: Optional[str] = None
     pdf_url: Optional[str] = None
+    origin: Optional[str] = "Desconhecido"
     media: Optional[List[MediaItemResponse]] = None
 
 class ChunkData(BaseModel):
@@ -83,3 +84,4 @@ class StatsResponse(BaseModel):
     unique_sources: int
     sources: List[str]
     collection_name: str
+    details: Optional[Dict[str, Any]] = None
