@@ -1,0 +1,47 @@
+{
+  "version": "1.0",
+  "associations": [
+    {
+      "document_name": "sup_cgnat.pdf",
+      "page_number": 1,
+      "keywords": [],
+      "media_items": [
+        {
+          "type": "video",
+          "url": "https://youtu.be/ghHAvsOpxGg",
+          "title": "CGNAT",
+          "description": "vídeo explicativo sobre o CGNAT",
+          "duration": 0
+        }
+      ]
+    },
+    {
+      "document_name": "sup_LesteSuporte.pdf",
+      "page_number": 1,
+      "keywords": [],
+      "media_items": [
+        {
+          "type": "video",
+          "url": "https://drive.google.com/file/d/175Xwok_JLUS3DzbT_9oVMq6ASxAkJGHy/view?usp=drive_link",
+          "title": "O que é o Leste Suporte / RouteThis?",
+          "description": "Video explicativo de uso do app Leste suporte.",
+          "duration": 0
+        }
+      ]
+    },
+    {
+      "document_name": "sup_LesteSuporte.pdf",
+      "page_number": 1,
+      "keywords": [],
+      "media_items": [
+        {
+          "type": "video",
+          "url": "https://youtu.be/ghHAvsOpxGg",
+          "title": "Teste",
+          "description": "Teste",
+          "duration": 0
+        }
+      ]
+    }
+  ]
+}
