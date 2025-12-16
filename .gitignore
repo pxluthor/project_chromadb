@@ -41,7 +41,7 @@ ENV/
 # Data
 data/pdfs/*.pdf
 data/chroma_db/
-
+docs/*.md
 # Logs
 *.log
 

@@ -2,11 +2,12 @@
 API REST para consulta do banco vetorial PDF RAG
 Versão sem multimídia (código antigo funcionando)
 """
-from fastapi import FastAPI, HTTPException, Depends, status
+from fastapi import FastAPI, HTTPException, Depends, status, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from contextlib import asynccontextmanager
-import sys
+import sys, os
+import shutil
 from pathlib import Path
 
 # Adiciona o diretório raiz ao path
@@ -22,11 +23,13 @@ from api.models import (
     ChatRequest,
     ChatResponse
 )
-from api.dependencies import get_rag_engine, get_vectorstore, get_chat_manager, set_components
+from api.dependencies import get_rag_engine, get_vectorstore, get_chat_manager, set_components, get_config
 from src.config import load_config
 from src.vectorstore import VectorStore
+from src.config import Config
 from src.rag_engine import RAGEngine
 from api.chat_manager import ChatManager
+from src.pdf_extractor import PDFExtractor
 
 from api.multimedia_routes import router as multimedia_router # para importar os arquivos de rotas de multimídia
 from fastapi.staticfiles import StaticFiles
@@ -343,6 +346,89 @@ async def get_chat_history(
             detail=f"Erro ao recuperar histórico: {str(e)}"
         )
 
+
+@app.post("/documents/upload")
+async def upload_document(
+    file: UploadFile = File(...),
+    vs: VectorStore = Depends(get_vectorstore),
+    config: Config = Depends(get_config)
+):
+    """
+    Rota Unificada: Cria Novo ou Atualiza Existente.
+    Se o arquivo já existir, ele é substituído (reindexado).
+    """
+    try:
+        filename = file.filename
+        file_path = config.pdfs_dir / filename
+        
+        # 1. Tenta limpar versão anterior (Lógica de Atualização)
+        # Se não existir, não faz mal, o método apenas não encontra nada.
+        vs.delete_document_by_name(filename)
+        
+        # 2. Salva o novo arquivo físico
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+            
+        # 3. Processa e Indexa
+        extractor = PDFExtractor()
+        try:
+            doc = extractor.extract_from_file(file_path)
+            stats = vs.add_documents([doc])
+            
+            return {
+                "message": f"Arquivo '{filename}' processado com sucesso (Adicionado/Atualizado)",
+                "stats": stats
+            }
+        except Exception as e:
+            # Rollback: apaga o arquivo se a leitura falhar
+            if file_path.exists():
+                os.remove(file_path)
+            raise HTTPException(status_code=400, detail=f"Erro ao processar PDF: {str(e)}")
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/documents/{filename}")
+async def delete_document(
+    filename: str,
+    vs: VectorStore = Depends(get_vectorstore),
+    config: Config = Depends(get_config)
+):
+    """
+    Rota de Exclusão: Remove embeddings e arquivo físico.
+    """
+    try:
+        # 1. Remove do ChromaDB
+        success = vs.delete_document_by_name(filename)
+        
+        # 2. Remove do disco
+        file_path = config.pdfs_dir / filename
+        if file_path.exists():
+            os.remove(file_path)
+            
+        if not success:
+            raise HTTPException(status_code=500, detail="Erro ao remover do banco de dados")
+            
+        return {"message": f"Documento '{filename}' excluído permanentemente"}
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@app.get("/documents/{filename}/view")
+async def view_document(
+    filename: str,
+    config: Config = Depends(get_config)
+):
+    """
+    Serve o arquivo PDF para visualização no navegador.
+    """
+    file_path = config.pdfs_dir / filename
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Arquivo não encontrado")
+    
+    # Retorna o arquivo com o tipo MIME correto para o navegador abrir
+    return FileResponse(path=file_path, media_type="application/pdf", filename=filename)
 
 # ============================================================================
 # ERROR HANDLERS

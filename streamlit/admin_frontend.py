@@ -1,7 +1,9 @@
 import streamlit as st
 import requests
 import pandas as pd
+import base64
 from urllib.parse import quote
+
 
 # ============================================================================
 # CONFIGURAÇÃO DA PÁGINA
@@ -86,6 +88,46 @@ def get_local_files(category):
         st.error(f"Erro ao listar arquivos locais: {e}")
         return []
 
+
+def upload_file_api(uploaded_file):
+    """Envia arquivo para a API (Serve para Criar e Atualizar)"""
+    try:
+        files = {"file": (uploaded_file.name, uploaded_file, "application/pdf")}
+        response = requests.post(f"{API_URL}/documents/upload", files=files)
+        if response.status_code == 200:
+            return True, response.json()
+        return False, response.text
+    except Exception as e:
+        return False, str(e)
+
+def delete_file_api(filename):
+    """Solicita exclusão do arquivo"""
+    try:
+        response = requests.delete(f"{API_URL}/documents/{filename}")
+        if response.status_code == 200:
+            return True, response.json()
+        return False, response.text
+    except Exception as e:
+        return False, str(e)
+
+def render_pdf_from_api(filename):
+    """
+    Busca o PDF na API e gera um iframe HTML para exibição
+    """
+    try:
+        # Chama a rota de view que criamos anteriormente
+        url = f"{API_URL}/documents/{filename}/view"
+        response = requests.get(url)
+        
+        if response.status_code == 200:
+            # Codifica os bytes em base64 para embutir no HTML
+            base64_pdf = base64.b64encode(response.content).decode('utf-8')
+            pdf_display = f'<iframe src="data:application/pdf;base64,{base64_pdf}" width="100%" height="900" type="application/pdf"></iframe>'
+            return pdf_display
+        else:
+            return None
+    except Exception as e:
+        return None
 # ============================================================================
 # INTERFACE PRINCIPAL
 # ============================================================================
@@ -112,10 +154,11 @@ with st.sidebar:
 st.title("🎬 Gerenciador de Multimídia RAG")
 
 # Abas
-tab_create, tab_explore, tab_list = st.tabs([
+tab_create, tab_explore, tab_list, tab_files = st.tabs([
     "➕ Adicionar Mídia", 
     "🔍 Explorar ChromaDB", 
-    "📋 Associações Existentes"
+    "📋 Associações Existentes",
+    "📁 Gerenciar Arquivos"
 ])
 
 # ============================================================================
@@ -390,3 +433,115 @@ with tab_list:
         st.divider()
         st.subheader("Raw JSON")
         st.json(assocs)
+
+# ============================================================================
+# TAB 4: GERENCIAR ARQUIVOS (Visualização Integrada)
+# ============================================================================
+with tab_files:
+    st.header("Gestão de Documentos PDF")
+    
+    # Inicializa estado de visualização se não existir
+    if 'selected_pdf' not in st.session_state:
+        st.session_state.selected_pdf = None
+
+    col_left, col_right = st.columns([1, 1], gap="large")
+    
+    # --- COLUNA ESQUERDA: UPLOAD & VISUALIZADOR ---
+    with col_left:
+        # 1. Área de Upload/Update
+        with st.container(border=True):
+            st.subheader("📤 Upload / Atualizar")
+            st.info("Para **atualizar**, envie um PDF com o mesmo nome do existente.")
+            
+            uploaded_file = st.file_uploader("Selecione o arquivo PDF", type=['pdf'])
+            
+            if uploaded_file:
+                stats = get_stats()
+                existing_docs = stats.get("sources", [])
+                is_update = uploaded_file.name in existing_docs
+                
+                btn_text = "🔄 Atualizar Arquivo" if is_update else "💾 Salvar Novo"
+                btn_type = "primary" if not is_update else "secondary"
+                
+                if is_update:
+                    st.warning(f"⚠️ Substituirá: '{uploaded_file.name}'")
+                
+                if st.button(btn_text, type=btn_type, use_container_width=True):
+                    with st.spinner("Processando..."):
+                        success, resp = upload_file_api(uploaded_file)
+                        if success:
+                            st.success("Sucesso!")
+                            st.rerun()
+                        else:
+                            st.error(f"Erro: {resp}")
+
+        # 2. Área de Visualização de PDF (Aparece aqui quando selecionado na direita)
+        if st.session_state.selected_pdf:
+            st.divider()
+            st.subheader(f"📄 Visualizando: {st.session_state.selected_pdf}")
+            
+            # Botão para fechar visualização
+            if st.button("Fechar Visualização", icon="❌"):
+                st.session_state.selected_pdf = None
+                st.rerun()
+            else:
+                # Renderiza o PDF
+                pdf_html = render_pdf_from_api(st.session_state.selected_pdf)
+                if pdf_html:
+                    st.markdown(pdf_html, unsafe_allow_html=True)
+                else:
+                    st.error("Erro ao carregar o PDF. Verifique se o arquivo ainda existe.")
+
+    # --- COLUNA DIREITA: LISTA DE ARQUIVOS ---
+    with col_right:
+        st.subheader("🗃️ Arquivos no Sistema")
+        
+        # Busca e Filtro
+        stats = get_stats()
+        docs = stats.get("sources", [])
+        
+        search_term = st.text_input("🔍 Buscar", placeholder="Filtrar por nome...")
+        
+        if search_term:
+            filtered_docs = [d for d in docs if search_term.lower() in d.lower()]
+        else:
+            filtered_docs = docs
+
+        st.caption(f"Total: {len(filtered_docs)} arquivos")
+        
+        # Lista com Scroll
+        with st.container(height=600, border=True):
+            if not filtered_docs:
+                st.info("Nenhum arquivo encontrado.")
+            
+            for doc in filtered_docs:
+                # Layout da linha: Nome | Ver | Excluir
+                c1, c2, c3 = st.columns([3, 0.8, 0.8])
+                
+                with c1:
+                    # Destaca em negrito se for o arquivo que está sendo visto
+                    if doc == st.session_state.selected_pdf:
+                        st.markdown(f"👉 **{doc}**")
+                    else:
+                        st.markdown(f"{doc}")
+                
+                with c2:
+                    # Botão VISUALIZAR (Atualiza o estado e recarrega)
+                    # Usamos um botão normal ao invés de link_button
+                    if st.button("👁️", key=f"view_{doc}", help="Ver na esquerda"):
+                        st.session_state.selected_pdf = doc
+                        st.rerun()
+                        
+                with c3:
+                    # Botão EXCLUIR
+                    if st.button("🗑️", key=f"del_{doc}", help="Excluir"):
+                        with st.spinner("Apagando..."):
+                            success, msg = delete_file_api(doc)
+                            if success:
+                                # Se apagou o arquivo que estava vendo, limpa a visualização
+                                if st.session_state.selected_pdf == doc:
+                                    st.session_state.selected_pdf = None
+                                st.toast("Arquivo excluído!")
+                                st.rerun()
+                            else:
+                                st.error("Erro ao excluir")

@@ -181,7 +181,7 @@ class VectorStore:
             self._vectorstore.delete_collection()
             self._vectorstore = None
     
-    def get_collection_stats(self) -> Dict[str, any]:
+    def get_collection_stats_old(self) -> Dict[str, any]:
         """
         Retorna estatísticas da collection
         
@@ -221,6 +221,44 @@ class VectorStore:
                 "collection_name": self.config.collection_name
             }
     
+    def get_collection_stats(self) -> Dict[str, any]:
+        """
+        Retorna estatísticas da collection (Versão Corrigida para listar tudo)
+        """
+        try:
+            collection = self.vectorstore._collection
+            count = collection.count()
+            
+            if count > 0:
+                # ALTERAÇÃO AQUI: Removemos o limit=min(100, count)
+                # Trazemos apenas os metadados de TODOS os chunks para identificar as fontes únicas
+                results = collection.get(include=["metadatas"])
+                
+                sources = set()
+                if results and "metadatas" in results:
+                    for metadata in results["metadatas"]:
+                        if "source" in metadata:
+                            sources.add(metadata["source"])
+                
+                return {
+                    "total_chunks": count,
+                    "unique_sources": len(sources),
+                    "sources": sorted(list(sources)),
+                    "collection_name": self.config.collection_name
+                }
+            else:
+                return {
+                    "total_chunks": 0,
+                    "unique_sources": 0,
+                    "sources": [],
+                    "collection_name": self.config.collection_name
+                }
+        except Exception as e:
+            return {
+                "error": str(e),
+                "collection_name": self.config.collection_name
+            }
+
     def clear_all_data(self) -> None:
         """Limpa todos os dados do vectorstore"""
         import shutil
@@ -228,3 +266,18 @@ class VectorStore:
             shutil.rmtree(self.config.chroma_dir)
             self.config.chroma_dir.mkdir(parents=True, exist_ok=True)
         self._vectorstore = None
+
+    def delete_document_by_name(self, filename: str) -> bool:
+        """
+        Remove todos os chunks associados a um nome de arquivo específico.
+        Essencial para Exclusão e Atualização (limpeza prévia).
+        """
+        try:
+            # Remove do ChromaDB filtrando pelo metadado 'source'
+            self.vectorstore._collection.delete(
+                where={"source": filename}
+            )
+            return True
+        except Exception as e:
+            print(f"Erro ao deletar documento {filename}: {e}")
+            return False
