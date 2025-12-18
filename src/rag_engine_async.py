@@ -14,7 +14,7 @@ from .multimedia_manager import MultimediaManager
 from urllib.parse import quote
 
 
-class RAGEngine:
+class RAGEngineAsync:
     """Engine RAG com operações assíncronas"""
     
     def __init__(

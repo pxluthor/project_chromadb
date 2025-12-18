@@ -358,12 +358,10 @@ class DualVectorStore(BaseVectorStore):
         super().__init__(config, max_workers)
         print("\n🚀 [DUAL MODE] Inicializando Sistema Híbrido (Chroma + Qdrant)")
         
-        self.chroma = ChromaDBVectorStore(config, max_workers=max_workers)
-        self.chroma.executor = self.executor
-
+        self.chroma = ChromaDBVectorStore(config, max_workers)
+        
         try:
-            self.qdrant = QdrantVectorStoreImp(config, max_workers=max_workers)
-            self.qdrant.executor = self.executor
+            self.qdrant = QdrantVectorStoreImp(config, max_workers)
             self._qdrant_online = True
         except Exception as e:
             print(f"⚠️ AVISO: Qdrant offline ({e}). Operando apenas com Chroma.")

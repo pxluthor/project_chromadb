@@ -55,4 +55,5 @@ chat_export_*.json
 
 # ChromaDB
 chroma.sqlite3
+*.pid
 

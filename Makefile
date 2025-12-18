@@ -3,7 +3,7 @@
 # Comandos
 API_CMD = uvicorn api.main:app --host 0.0.0.0 --port 8005 --reload --log-level debug
 # Ajuste: O caminho correto para o arquivo é streamlit/admin_frontend.py
-STREAMLIT_CMD = streamlit run streamlit/admin_frontend.py
+STREAMLIT_CMD = streamlit run streamlit/rag_admin.py
 
 .PHONY: start stop logs clean
 
